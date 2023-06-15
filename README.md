@@ -5,9 +5,5 @@ Given bio-medical maps from different place types, the goal is to learn a spatia
 We introduce SVANN-Bio, a spatial-variability aware neural network for bio-medical spaces, to effectively distinguish between maps belonging to distinct spatial domains. SVANN-Bio employs a symbolic knowledge-guided spatial reference approach to select appropriate model locations due to the lack of a spatial coordinate system in non-rigid spaces. The term ``symbolic`` refers to the spatial characterization of different place types defined by domain experts. ``Knowledge-guided`` refers to the relative distance between these place types, which are used as inputs to the deep learning model during the training process based on the location of the model neural network. Similarly, the relative distances are also often defined by domain experts in related applications.
 <img src='./SVANN-Bio.jpg' width=800>
 
-## Author's Implementations
-
-The classification experiments in our paper are done with the pytorch implementation.
-
 ## Acknowledgement
 The structure of this codebase is borrowed from [DGCNN](https://github.com/WangYueFt/dgcnn) and [SAMCNet](https://github.com/majid-farhadloo/SAMCNet_2022)
