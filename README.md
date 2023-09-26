@@ -7,5 +7,56 @@ This framework deploys a spatial ensemble technique involving multiple spatial m
 In this problem, we are given multi-category point sets from various place-types, where each point set is associated with one of two class labels. Additionally, we have a weighted distance matrix, denoted as $D$, where each cell represents the relative distance between two place-types $T_i$ and $T_j$, as defined by domain experts. The objective is to develop a spatially-lucid classifier algorithm that accurately separates the two class labels. Since each place-type belongs to a unique spatial domain, the location of the target deep neural network classifier is significant. This positioning is essential for selecting suitable training samples, which is determined by the distance threshold $\alpha$. It allows the model to learn spatial patterns specific to each place-type, ensuring it accommodates spatial variations and yields dependable classification results.
 <img src='./Proposed.jpg' width=1200>
 
+## Instructions:
+training model for different settings
+python main.py 
+    --place_type ["one-size-fits-all/OSFA, Normal, Interface, Tumor] 
+    --exp_name_global "name of the global model" (if pretrained_status True)
+    --exp_name_local  "name of the local model"
+    --pretrain_status "this indicates if we use domain adapataion or no and if we already have a global model or not!" 
+    --model "[pointnet, dgcnn, pointTransformers, samcnet]", which neural network architecture to be used"
+    --weighted_distance "if we use weighted-distance learning rate (adjust learning rate based on the location of target model)"
+    --use_pe "if we use positional encoding for samcnet and pointtransformers
+    --batch_size "the size of training batch"
+    --test_batch_size "the size of testing batch"
+    --epochs_global "number of epochs needed to train a global model"
+    --epochs_local "number of epochs needed to train a local model, or #epochs to train a place-type-based model from scratch
+    --radius neighrbodhood distance to create a locally-connected-graph
+    --num_neighbors "how many neighbors to be selected for KNN"
+    --use_sgd "if to use stochastic gradient descent" 
+    --lr "learning rate: intial one 0.001"
+    --momentum "momentum  default=0.9" 
+    --no_cuda "if to use GPU or not"
+    --num_points "size of point set"
+    --num_heads "number of attention heads for samcnet, Pointnet has a similar parameters that is assigned locally"
+    --dropout "dropout parameter for remaining layers"
+    --emb_dims "number of dimension of embeddings" 
+    --PE_dim "output dimmension of positional encoding (if use_pe fasle) this should be 3"
+    --num_frozen_layers "If exists a pre-trained model, how many layers should be frozen for fine-tuning"
+    --train_res_global "save training results for global model"
+    --train_res_local "save training results for local model"
+    --test_res_local "save testing results for local model"
+    --local_learner_path "the path to local model to be fine-tuned for target place-type"
+
+## Hyperparameters:
+
+| Parameters | Normal (PT 1) | Interface (PT 2) | Tumor (PT 3)|
+|---------|---------|---------|---------|
+| Epoch global| 150| 150|150|
+| Epoch local| 50| 50| 50|
+| batch size| 16| 16| 16|
+| learning rate| 0.001| 0.001| 0.001|
+| momentum| 0.9| 0.9| 0.9|
+| num\_points| 1024| 1024| 1024|
+| dropout| 0.5| 0.5| 0.5|
+| num\_neighbors| 5| 7| 5|
+| neighborhood distance (radius)| 75| 100| 75|
+| min\_grid\_scale| 1| 1| 1|
+| max\_grid\_scale | 100| 100| 100|
+|grid\_scale\_count| 5| 5| 5|
+
+num_frozen_layers: choices=['pointnet, num_frozen_layers=3',  'dgcnn, num_frozen_layers = 3', 'pointTransformers',  num_frozen_layers = 9' 'samcnet',  num_frozen_layers = 4']
+
+
 ## Acknowledgement
 The structure of this codebase is borrowed from [DGCNN](https://github.com/WangYueFt/dgcnn) and [SAMCNet](https://github.com/majid-farhadloo/SAMCNet_2022)
