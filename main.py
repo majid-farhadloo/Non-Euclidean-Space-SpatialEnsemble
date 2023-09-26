@@ -1,4 +1,6 @@
+# {0: 'B Cell', 1: 'Cytotoxic T Cell', 2: 'Helper T Cell', 3: 'Macrophage', 4: 'Monocyte', 5: 'Neutrophil', 6: 'Plasma Cell', 7: 'Regulatory T Cell', 8: 'Tumor Cell', 9: 'Vasculature'}
 from __future__ import print_function
+from audioop import avg
 import sys
 import os
 import argparse
@@ -7,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from base_model import PointNet, DGCNN, FCNN
+from model import PointNet, DGCNN, FCNN, Point_Transformer
 from SAMCNet import SpatialDGCNN
 import numpy as np
 from torch.utils.data import DataLoader
@@ -23,107 +25,21 @@ import pickle
 import warnings
 from torch.profiler import profile, record_function, ProfilerActivity 
 from torch.utils.tensorboard import SummaryWriter
-
-
 warnings.filterwarnings("ignore")
-
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-def _init_():
-    add =  './checkpoints/' + args.dataset + "/" + args.exp_name 
+def _init_(exp_name):
+    add =  './checkpoints/' + args.place_type + "/" + exp_name
     if not os.path.exists('checkpoints'):
         os.makedirs('checkpoints')
     if not os.path.exists(add):
         os.makedirs(add)
+        print(add) 
     if not os.path.exists(add + '/'+'models'):
         os.makedirs( add +'/'+'models')
+        print(add +'/'+'models') 
 
-def train(args, io):
-    '''
-    See __main__ for args parser
-    '''
-    writer = SummaryWriter("./log/" + args.exp_name)
-    args.transformed_samples = args.transformed_samples_train 
-    print(f'Using {args.dataset} dataset')
-    
-
-    samples_dist_reg = pickle.load(open( "./datasets/[spatially_partition_dataset].p", "rb" ))
-    training = samples_dist_reg["Train"]    
-    validation = samples_dist_reg["Valid"] 
-    
-    if args.dataset == 'osfa':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_path = 'datasets/OSFA/train.csv'
-        print(sub_path)
-        df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'noZone': # this is a single model for all regions
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = training[0], training[1]
-        df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'place_type_1':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = training[0][args.zone], training[1][args.zone]
-        # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-        sub_path = 'datasets/place_type_1/train.csv'
-        # df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'place_type2':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = training[0][args.zone], training[1][args.zone]
-        # sub_path = 'datasets/place_type_2/split/train_' + str(args.train_val_index) + '.csv'
-        sub_path = 'datasets/place_type_2/train.csv'
-        # df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        
-        label_name = 'class_label'
-        output_channels = 2
-   
-    elif args.dataset == 'place_type_3':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = training[0][args.zone], training[1][args.zone]
-        # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-        sub_path = 'datasets/place_type_3/train.csv'
-        # df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        
-        label_name = 'class_label'
-        output_channels = 2
-    
-
-        
-    df.point_categories = df.point_categories.cat.remove_unused_categories()
-    df.Sample = df.Sample.cat.remove_unused_categories()
-    df.Pathology = df.Pathology.cat.remove_unused_categories()
-    class_labels = list(df[label_name].cat.categories)
-    num_classes = len(df['point_categories'].cat.codes.unique())
-    num_samples = 0
-    
-    epoch = 0
-    train_set = dataset.PathologyDataset(dataset=df, label_name=label_name, num_points=args.num_points, class_label = "Train", dataset_name=args.dataset,
-    batch_size=args.batch_size, num_samples=num_samples, epoch = epoch, train_val_index = args.train_val_index, num_neighbors = args.num_neighbors, radius = args.radius,
-    transforms=torchvision.transforms.Compose([transforms.PartitionData(n_partitions=4, n_rotations=16)]), transformed_samples=args.transformed_samples_train)
-    
-    sampler = dataset.get_sampler(train_set.dataset, label_name, class_labels, args.transformed_samples_train)
-    
-    if len(sampler)%args.batch_size>(args.batch_size/2)-1:
-        drop_last = False
-    else: 
-        drop_last = True
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, drop_last=drop_last, sampler=sampler)
-  
+def load_model(args, output_channels, num_classes):
     #Try to load models
     if args.model == 'pointnet':
         model = PointNet(args, output_channels=output_channels).to(device)
@@ -131,78 +47,103 @@ def train(args, io):
         model = FCNN(output_channels=output_channels).to(device) 
     elif args.model == 'dgcnn':
         model = DGCNN(args, output_channels=output_channels).to(device)
-    elif args.model == 'sdgcnn':
+    elif args.model == 'samcnet':
         model = SpatialDGCNN(args, num_classes, output_channels).to(device)
+    elif args.model == 'pointTransformers':
+        ## Hyperparameters
+        config = {'num_points' : 1024,
+            'batch_size': 16,
+            'use_normals': False,
+            'optimizer': 'adam',
+            'lr': 0.001,
+            'decay_rate': 1e-06,
+            'epochs': 200,
+            'num_classes': 2,
+            'dropout': 0.4,
+            'M': 4,
+            'K': 15,
+            'd_m': 512,
+            }
+        model = Point_Transformer(config).to(device)
     else:
         raise Exception("Not implemented")
     # print(str(model))
-    model = nn.DataParallel(model)
+    return model
 
+def training_iter(args, data_loaders_train, data_loaders_valid, io, epochs, num_classes = None, output_channels = 2, save_train_results = None, exp_name = "global", pretrain_path = None, pretrain_status = False):
+    
+    add =  f'checkpoints/{args.place_type}/{exp_name}/models/'
+    if not os.path.exists(add):
+        os.makedirs(add)
+        
+    writer = SummaryWriter("./log/" + args.exp_name_global)
+    model = load_model(args, output_channels, num_classes)
+    model = nn.DataParallel(model)
+        
+    "Freezing model parameters"
+    if pretrain_status:
+            model.load_state_dict(torch.load(pretrain_path))
+            # model_modules = list(model.module.children())[:4]
+            model_modules = list(model.module.children())[:args.num_frozen_layers]
+            for module in model_modules:
+                for parameters in module.parameters():
+                    parameters.requires_grad = False
     if args.use_sgd:
         opt = optim.SGD(model.parameters(), lr=args.lr*100, momentum=args.momentum, weight_decay=1e-4)
     else:
         opt = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4) # NOTE: GAT uses lr=0.005, weight_decay=5e-4
 
-    scheduler = CosineAnnealingLR(opt, args.epochs, eta_min=args.lr)
-    
+    scheduler = CosineAnnealingLR(opt, epochs, eta_min=args.lr)
     criterion = cal_loss
-    train_acc = 0
-    best_train_acc = 0
-    best_valid_acc = 0
+    train_acc, best_train_acc, best_valid_acc = 0, 0, 0
     columns = ["train_average", "train_overall", "valid_average", "valid_overall", "train_loss", "train_times", "train_pred", "train_true"]     
     '''Output result to CSV'''
     res = pd.DataFrame(columns=columns) 
+    running_loss, running_correct, counter = 0.0, 0.0, 0
 
-
-    running_loss = 0.0
-    running_correct = 0.0
-    counter = 0
-    for epoch in range(args.epochs):
+    for epoch in range(epochs):
         train_average, train_losses, train_overall, train_times, valid_average, valid_overall = [], [], [], [], [], []
         start_time = time.time()
         scheduler.step()
         ####################
-        # Train
+        # Train model
         ####################
         train_loss = 0.0
         count = 0.0
         model.train()
-        train_pred = []
-        train_true = []
-        valid_pred = []
-        valid_true = []
-        batch_counter = 1
-        n_total_steps = len(train_loader)
-        if epoch>1:
-            num_samples = len(sampler)
-        for data, label in train_loader:
-            # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-                # with record_function("SAMCNet"):
-            data, label = data.to(device), label.to(device).squeeze()
-            batch_size = data.size()[0]
-            opt.zero_grad()
-            since = time.time()
-            logits, _ , _ = model(data)
-            loss = criterion(logits, label)
-            loss.backward()
-            opt.step()
-            now = time.time()
-            # print(f'the time that takes for the batch {batch_counter} is {(now - since)/60}')
-            batch_counter+=1
-            preds = logits.max(dim=1)[1]
-            count += batch_size
-            train_loss += loss.item() * batch_size
-            train_true.append(label.cpu().numpy())
-            train_pred.append(preds.detach().cpu().numpy())
-            counter+=batch_size
-            running_loss += loss.item()
-            running_correct += (preds == label).sum().item()
-            if counter%32 == 0:
-                 running_loss
-                 writer.add_scalar("training loss", running_loss/32, counter)
-                 writer.add_scalar("training acc", running_correct/32, counter)
-                 running_loss = 0.0
-                 running_correct = 0    
+        train_pred, train_true, valid_pred, valid_true = [], [], [], []
+        for data_batch in data_loaders_train:
+            if args.weighted_distance:
+                distance_id = data_batch.dataset.dataset.lr_id.unique().item()
+                opt.param_groups[0]["lr"] = args.lr/distance_id
+            for data, label in data_batch:
+                data, label = data.to(device), label.to(device).squeeze()
+                batch_size = data.size()[0]
+                opt.zero_grad()
+                data = data[:,:,:3]
+                if args.model == "pointTransformers":
+                    data = data.permute(0,2,1)
+                # print(data, label)
+                logits, _, _ = model(data)
+                # print(logits)
+                # sys.exit(-1)
+                loss = criterion(logits, label)
+                loss.backward()
+                opt.step()
+                preds = logits.max(dim=1)[1]
+                count += batch_size
+                train_loss += loss.item() * batch_size
+                # print("label: ", label.cpu().numpy())
+                train_true.append(label.cpu().numpy())
+                train_pred.append(preds.detach().cpu().numpy())
+                counter+=batch_size
+                running_loss += loss.item()
+                running_correct += (preds == label).sum().item()
+                if counter%64 == 0:
+                    running_loss
+                    writer.add_scalar("training loss", running_loss/32, counter)
+                    writer.add_scalar("training acc", running_correct/32, counter)
+                    running_loss, running_correct = 0.0, 0.0
         train_true = np.concatenate(train_true)
         train_pred = np.concatenate(train_pred)
         train_acc = metrics.accuracy_score(train_true, train_pred)
@@ -212,11 +153,10 @@ def train(args, io):
         
         if train_acc > best_train_acc:
             best_train_acc = train_acc
-            torch.save(model.state_dict(), f'checkpoints/{args.dataset}/{args.exp_name}/models/train.t7')
-            
+            torch.save(model.state_dict(), f'checkpoints/{args.place_type}/{exp_name}/models/train.t7')
+
         avg_per_class_train_acc = metrics.balanced_accuracy_score(train_true, train_pred)
         train_times.append(time.time()-start_time)
-        # print(f'the time that takes for the epoch {epoch} is {(time.time()-start_time)/60}')
         train_overall.append(train_acc)
         train_average.append(avg_per_class_train_acc)
         train_losses.append(train_loss*1.0/count)
@@ -225,85 +165,22 @@ def train(args, io):
         outstr = 'Train loss: %.6f, train acc: %.6f, train avg acc: %.6f, train f1 score: %.6f, train precision: %.6f, train recall: %.6f' % (
                   train_loss*1.0/count, train_acc, avg_per_class_train_acc, train_f1, train_precision, train_recall)
         io.cprint(outstr)
-        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()  
+
+        for data_batch in data_loaders_valid:
+            if args.weighted_distance:
+                distance_id = data_batch.dataset.dataset.lr_id.unique().item()
+                opt.param_groups[0]["lr"] = args.lr/distance_id
+            for data, label in data_batch:
+                data, label = data.to(device), label.to(device).squeeze()
+                data = data[:,:,:3]
+                if args.model == "pointTransformers":
+                    data = data.permute(0,2,1)
+                logits, _, _ = model(data)
+                preds = logits.max(dim=1)[1]
+                valid_true.append(label.cpu().numpy())
+                valid_pred.append(preds.detach().cpu().numpy())
         
-        ####################
-        # Validation
-        ####################
-        if args.dataset == 'osfa':
-            in_file = 'datasets/base_dataset_name.tsv'
-            sub_path = 'datasets/OSFA/val.csv'
-            valid_df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-            label_name = 'class_label'
-            output_channels = 2
-
-        elif args.dataset == 'noZone':
-            in_file = 'datasets/base_dataset_name.tsv'
-            sub_data_reg, sub_data_norm = validation[0], validation[1]
-            # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-            valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-            # valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-            label_name = 'class_label'
-            output_channels = 2   
-
-        elif args.dataset == 'place_type_1':
-            in_file = 'datasets/base_dataset_name.tsv'
-            sub_data_reg, sub_data_norm = validation[0][args.zone], validation[1][args.zone]
-            # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-            sub_path = 'datasets/place_type_1/validation.csv'
-            # valid_df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-            valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-            # valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-            label_name = 'class_label'
-            output_channels = 2
-
-        elif args.dataset == 'place_type_2':
-            in_file = 'datasets/base_dataset_name.tsv'
-            sub_data_reg, sub_data_norm = validation[0][args.zone], validation[1][args.zone]
-            # sub_path = 'datasets/place_type_2/split/train_' + str(args.train_val_index) + '.csv'
-            sub_path = 'datasets/place_type_2/validation.csv'
-            # valid_df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-            # valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-            valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-            label_name = 'class_label'
-            output_channels = 2
-
-        elif args.dataset == 'place_type_3':
-            in_file = 'datasets/base_dataset_name.tsv'
-            sub_data_reg, sub_data_norm = validation[0][args.zone], validation[1][args.zone]
-            # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-            sub_path = 'datasets/place_type_3/validation.csv'
-            # valid_df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-            # valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-            valid_df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-            label_name = 'class_label'
-            output_channels = 2
-    
-        class_labels = list(valid_df[label_name].cat.categories)
-        valid_df.point_categories = valid_df.point_categories.cat.remove_unused_categories()
-        valid_df.Sample = valid_df.Sample.cat.remove_unused_categories()
- 
-        validation_set = dataset.PathologyDataset(dataset=valid_df, label_name=label_name, num_points=args.num_points, class_label = "Validation",  dataset_name=args.dataset, 
-        batch_size=args.batch_size, num_samples=num_samples, epoch = epoch, train_val_index = args.train_val_index, num_neighbors = args.num_neighbors, radius = args.radius,
-        transforms=torchvision.transforms.Compose([transforms.PartitionData(n_partitions=4,n_rotations=16)]), transformed_samples=args.transformed_samples_val)
-        
-        sampler = dataset.get_sampler(validation_set.dataset, label_name, class_labels, args.transformed_samples_val)
-        if len(sampler)%args.batch_size>(args.batch_size/2)-1:
-            drop_last = False
-        else:
-            drop_last = True
-        valid_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, drop_last=drop_last, sampler=sampler)
- 
-        batch_counter = 0
-        if epoch>0:
-            num_samples = len(sampler)
-        for data, label in valid_loader:
-            data, label = data.to(device), label.to(device).squeeze()
-            logits, _ , _ = model(data)
-            preds = logits.max(dim=1)[1]
-            valid_true.append(label.cpu().numpy())
-            valid_pred.append(preds.detach().cpu().numpy())
-    
         valid_true = np.concatenate(valid_true)
         valid_pred = np.concatenate(valid_pred)
         valid_acc = metrics.accuracy_score(valid_true, valid_pred)
@@ -315,151 +192,182 @@ def train(args, io):
 
         if valid_acc>=best_valid_acc:
             best_valid_acc = valid_acc
-            torch.save(model.state_dict(), f'checkpoints/{args.dataset}/{args.exp_name}/models/val.t7')
+            torch.save(model.state_dict(), f'checkpoints/{args.place_type}/{exp_name}/models/val.t7')
 
         valid_overall.append(valid_acc)
         valid_average.append(avg_per_class_acc)
         csv = {
-        'train_overall':  train_overall,
-        'train_f1': train_f1,
-        'train_precision': train_precision,
-        'train_recall': train_recall, 
-        'valid_overall': valid_overall,
-        'valid_f1': valid_f1,
-        'valid_precision': valid_precision,
-        'valid_recall': valid_recall,
-        'train_loss':  train_losses,
-        'train_times': train_times,
-        }
-
+        'train_overall':  train_overall, 'train_f1': train_f1, 'train_precision': train_precision,'train_recall': train_recall, 
+        'valid_overall': valid_overall, 'valid_f1': valid_f1, 'valid_precision': valid_precision, 'valid_recall': valid_recall,
+        'train_loss':  train_losses,'train_times': train_times,}
         res = res.append(csv, ignore_index=True)
-        # saving the dataframe 
-        res.to_csv(args.save_train_results +  str(args.exp_name) + "/results.csv")
-
+        res.to_csv(save_train_results + "/results.csv")
         io.cprint(outstr)
-        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()   
+    print("Training is finished!")
+    model_path = f'checkpoints/{args.place_type}/{exp_name}/models/train.t7'
+    return model, model_path
 
-def test(args, io):
-    samples_dist_reg = pickle.load(open( "./datasets/[spatially_partition_dataset].p", "rb" ))
-    testing = samples_dist_reg["Test"]  
-
-    if args.dataset == 'osfa':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_path = 'datasets/OSFA/test.csv'
-        # sub_path = 'datasets/OSFA/test.csv'
-        print(sub_path)
-        df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        print(dict(enumerate(df['point_categories'].cat.categories)))
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'noZone': # this is a single model for all regions
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = testing[0], testing[1]
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'place_type_1':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_data_reg, sub_data_norm = testing[0][args.zone], testing[1][args.zone]
-        # sub_path = 'datasets/place_type_3/split/train_' + str(args.train_val_index) + '.csv'
-        sub_path = 'datasets/place_type_1/test.csv'
-        # df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        label_name = 'class_label'
-        output_channels = 2
-
-    elif args.dataset == 'place_type_2':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_path = 'datasets/place_type_2/test.csv'
-        # sub_data_reg, sub_data_norm = testing[0][args.zone], testing[1][args.zone]
-        df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        print(dict(enumerate(df['point_categories'].cat.categories)))
-        label_name = 'class_label'
-        output_channels = 2
-
-
-    elif args.dataset == 'place_type_3':
-        in_file = 'datasets/base_dataset_name.tsv'
-        sub_path = 'datasets/place_type_3/test.csv'
-        # sub_data_reg, sub_data_norm = testing[0][args.zone], testing[1][args.zone]
-        df = dataset.read_dataset(in_file, sub_path = sub_path, zonal=True)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_reg)
-        # df = dataset.read_dataset(in_file, sub_path = None, sub_data=sub_data_norm)
-        print(dict(enumerate(df['point_categories'].cat.categories)))
-        label_name = 'class_label'
-        output_channels = 2
-
-    
-    df.point_categories = df.point_categories.cat.remove_unused_categories()
-    df.Sample = df.Sample.cat.remove_unused_categories()
-    num_classes = len(df.point_categories.cat.codes.unique())    
-    test_set = dataset.PathologyDataset(dataset=df, label_name=label_name, num_points=args.num_points, class_label = "Test", dataset_name=args.dataset,
-    batch_size=args.test_batch_size, num_samples=0, epoch = 0, train_val_index = args.train_val_index,  num_neighbors = args.num_neighbors, 
-    radius = args.radius)
-    
-    if len(test_set)%args.test_batch_size>args.test_batch_size/2 :
-        drop_last = False
-    else:
-        drop_last = False
-    
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size, drop_last=drop_last)
-
-    device = torch.device("cuda" if args.cuda else "cpu")
-    
-    #Try to load models
-    if args.model == 'pointnet':
-        model = PointNet(args, output_channels=output_channels).to(device)
-    elif args.model ==  'fcnn':
-        model = FCNN(output_channels=output_channels).to(device) 
-    elif args.model ==  'dgcnn':
-        model = DGCNN(args, output_channels=output_channels).to(device) 
-    else:
-        model = SpatialDGCNN(args, num_classes, output_channels).to(device)
+def test_iter(args, data_loaders_test, io, num_classes = None, output_channels = 2, test_res_local = None, model_path = None, save_feats_path = None, feats_extract = False):
+    # columns = ["test_prob", "test_pred", "test_true"]     
+    # '''Output result to CSV'''
+    # res = pd.DataFrame(columns=columns)
+    model = load_model(args, output_channels, num_classes)
     model = nn.DataParallel(model)
-    model.load_state_dict(torch.load(args.model_path))
+    model.load_state_dict(torch.load(model_path))
     model = model.eval()
     test_acc = 0.0
-    test_true = []
-    test_pred = []
-    prioritization_4 =  {}
-    point_pairs_add = {}
-    count = 0
-    batch_counter = 1
-    for data, label in test_loader:
-        data, label = data.to(device), label.to(device).squeeze()
-        logits, prior_4, pointpair = model(data)
-        '''
-        Extracting features for other classifiers
-        '''
-        prioritization_4[count] =  prior_4.cpu()
-        point_pairs_add[count] =  pointpair.cpu()
-        batch_counter+=1
-        count+=1
-        preds = logits.max(dim=1)[1]
-        test_true.append(label.cpu().numpy())
-        test_pred.append(preds.detach().cpu().numpy())
-    test_true = np.concatenate(test_true)
-    test_pred = np.concatenate(test_pred)
-    test_acc = metrics.accuracy_score(test_true, test_pred)
-    avg_per_class_acc = metrics.balanced_accuracy_score(test_true, test_pred)
-    test_f1 = metrics.f1_score(test_true, test_pred, average='weighted')
-    test_precision = metrics.precision_score(test_true, test_pred, average='weighted')
-    test_recall = metrics.recall_score(test_true, test_pred, average='weighted')
+    # test_true , test_pred = [], []
+    fe_256, fe_512 = {}, {}
+    for epoch in range(1):
+        test_prob, test_pred, test_true = [], [], []
+        count = 0
+        for data_batch in data_loaders_test:
+            for data, label in data_batch:
+                data, label = data.to(device), label.to(device).squeeze()
+                if args.model == "pointTransformers":
+                    data = data.permute(0,2,1)
+                '''
+                Extracting features
+                '''
+                if feats_extract:
+                    logits, fc_512, fc_256 = model(data)
+                    fe_512[count]= fc_512.detach().cpu()
+                    fe_256[count]= fc_256.detach().cpu()
+                    count+=1
+                else:
+                    logits, _, _ = model(data)
+                    probabilities = F.softmax(logits, dim=1)
+                preds = logits.max(dim=1)[1]
+                test_true.append(label.cpu().numpy())
+                test_pred.append(preds.detach().cpu().numpy())
+                test_prob.append(probabilities.max(dim=1)[0].detach().cpu().numpy())
+        test_true = np.concatenate(test_true)
+        test_pred = np.concatenate(test_pred)
+        test_prob = np.concatenate(test_prob)
+
+        test_acc = metrics.accuracy_score(test_true, test_pred)
+        avg_per_class_acc = metrics.balanced_accuracy_score(test_true, test_pred)
+        test_f1 = metrics.f1_score(test_true, test_pred, average='weighted')
+        test_precision = metrics.precision_score(test_true, test_pred, average='weighted')
+        test_recall = metrics.recall_score(test_true, test_pred, average='weighted')
         
 
-    test_true = []
-    test_pred = []
-    outstr = 'test :: test acc: %.6f, test avg acc: %.6f, test f1 score: %.6f, test precision: %.6f, test recall: %.6f'%(test_acc, avg_per_class_acc, test_f1, test_precision, test_recall)
-    io.cprint(outstr)
-    pickle.dump(prioritization_4, open(args.save_features + "prioritization_4.p", "wb" ))
-    pickle.dump(point_pairs_add, open(args.save_features + "point_pairs.p", "wb" ))
+        print("test_pred: -->", len(test_pred))
+
+        csv = {'test_prob':  test_prob, 'test_pred': test_pred, 'test_true': test_true}
+        pickle.dump(csv, open(test_res_local + 'result.p', "wb" ))
+        # res = res.append(csv, ignore_index=True)
+        # res.to_csv(test_res_local + "/results.csv")
+
+        outstr = 'test :: test acc: %.6f, test avg acc: %.6f, test f1 score: %.6f, test precision: %.6f, test recall: %.6f'%(test_acc, avg_per_class_acc, test_f1, test_precision, test_recall)
+        io.cprint(outstr)
+        if feats_extract:
+            pickle.dump(fe_512, open(save_feats_path + "_fc_512.p", "wb" ))
+            pickle.dump(fe_256, open(save_feats_path + "_fc_256.p", "wb" ))
         
+    
+    
+
+def prep_data(args, dataset_path = 'datasets/BestClassification_July2021_14Samples.tsv', place_type = "Interface", dataset_type = "train", num_transformed_sample = 1):
+    
+    if args.weighted_distance:
+        sub_path = 'datasets/' + place_type + '/' + dataset_type + '_target.csv'
+        print(sub_path)
+        df, data_samples = dataset.read_dataset(dataset_path, sub_path = sub_path, dataset_type = "weighted_distance")
+    else:
+        sub_path = 'datasets/' + place_type + '/' + dataset_type + '.csv'
+        print(sub_path)
+        df, data_samples = dataset.read_dataset(dataset_path, sub_path = sub_path, dataset_type = dataset_type)
+        
+    label_name = 'Status'
+    output_channels = 2
+
+    df.Phenotype = df.Phenotype.cat.remove_unused_categories()
+    df.Sample = df.Sample.cat.remove_unused_categories()
+    df.Pathology = df.Pathology.cat.remove_unused_categories()
+    class_labels = list(df[label_name].cat.categories)
+
+    num_classes = len(df['Phenotype'].cat.codes.unique())
+    if dataset_type == "train" or dataset_type == "val":
+        if args.weighted_distance:
+            lr_ids = df.lr_id.unique()
+            data_loader_set = []  
+            for lr_id in lr_ids:
+                sample_data = df[df.lr_id == lr_id]
+                data_points = data_samples[data_samples.lr_id == lr_id]
+                data_set = dataset.PathologyDataset(dataset=sample_data, label_name=label_name, num_points=args.num_points,
+                batch_size=args.batch_size, train_val_index = args.train_val_index, 
+                transformed_samples= num_transformed_sample, dataset_type="weighted_distance",
+                transforms=torchvision.transforms.Compose([transforms.PartitionData(n_partitions=4, n_rotations=16)]))
+                
+                sampler = dataset.get_sampler(data_set.dataset, label_name, class_labels, data_points, args.transformed_samples_train)
+                
+                if len(sampler)%args.batch_size>(args.batch_size/2)-1:
+                    drop_last = False
+                else: 
+                    drop_last = True
+                dl = torch.utils.data.DataLoader(data_set, batch_size=args.batch_size, drop_last=drop_last, sampler=sampler)
+                data_loader_set.append(dl)
+            
+        else:
+                data_set = dataset.PathologyDataset(dataset=df, label_name=label_name, num_points=args.num_points, 
+                batch_size=args.batch_size, train_val_index = args.train_val_index, 
+                transformed_samples= num_transformed_sample, dataset_type=place_type,
+                transforms=torchvision.transforms.Compose([transforms.PartitionData(n_partitions=4, n_rotations=16)]))
+            
+                sampler = dataset.get_sampler(data_set.dataset, label_name, class_labels, data_samples, args.transformed_samples_train)
+            
+                
+                if len(sampler)%args.batch_size>(args.batch_size/2)-1:
+                    drop_last = False
+                else: 
+                    drop_last = True
+
+                dl = torch.utils.data.DataLoader(data_set, batch_size=args.batch_size, drop_last=drop_last, sampler=sampler)
+                data_loader_set = [dl]
+    else:
+        test_set = dataset.PathologyDataset(dataset=df, label_name=label_name, num_points=args.num_points, batch_size=args.test_batch_size, 
+                    train_val_index = 1, dataset_type=place_type) 
+        print("test_set: -->", len(test_set))       
+        dl = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size, drop_last=False)
+        data_loader_set = [dl]          
+
+    return data_loader_set, num_classes, output_channels
+
+def pretrain_learner(args, io):
+    
+    data_loaders_train, num_classes, output_channels = prep_data(args, place_type="OSFA", dataset_type="train", num_transformed_sample= args.transformed_samples_train)
+    data_loaders_valid, _, _ = prep_data(args, place_type="OSFA", dataset_type="val", num_transformed_sample = args.transformed_samples_val)
+    
+    pretrained_model, model_path = training_iter(args = args, data_loaders_train = data_loaders_train, data_loaders_valid = data_loaders_valid, io = io, epochs = args.epochs_global, num_classes = num_classes, output_channels = output_channels, save_train_results = args.train_res_global, exp_name = args.exp_name_global)
+    
+    return pretrained_model, model_path
+
+
+def local_learner(args, pretrained_model_path, io):
+    # re-train the network for deep layer based on the place type (e.g., 1, 2, 3) #
+    
+    data_loaders_train, _, output_channels = prep_data(args, place_type = "Interface", dataset_type="train", num_transformed_sample= args.transformed_samples_train)
+    data_loaders_valid, _, _ = prep_data(args, place_type = "Interface", dataset_type="val", num_transformed_sample = args.transformed_samples_val)
+    num_classes = 8
+
+    
+    place_specifc_model, place_specifc_model_path = training_iter(args = args, data_loaders_train = data_loaders_train, data_loaders_valid = data_loaders_valid, io = io, 
+                                                                  num_classes = num_classes, output_channels = output_channels,
+                                                                save_train_results=args.train_res_local, exp_name = args.exp_name_local, 
+                                                                pretrain_path = global_model_path, pretrain_status = False, epochs=args.epochs_local)
+    return place_specifc_model, place_specifc_model_path
+
+def test(args, io):
+    data_loaders_test, num_classes, output_channels = prep_data(args, place_type=args.place_type, dataset_type="test")
+
+    model_path = args.local_learner_path
+
+    test_iter(args = args, data_loaders_test = data_loaders_test, io = io, 
+              num_classes = 8, output_channels = 2, test_res_local = args.test_res_local, model_path = model_path, save_feats_path = None, feats_extract = False)
+    
+
 if __name__ == "__main__":
     # Training settings
     parser = argparse.ArgumentParser(description='Spatial DGCNN')
@@ -468,29 +376,40 @@ if __name__ == "__main__":
                         help='Num of data transformation')
     parser.add_argument('--transformed_samples_val', type=int, default=3, metavar='N',
                         help='Num of data transformation')
-    parser.add_argument('--exp_name', type=str, default='exp', metavar='N',
+    parser.add_argument('--place_type', type=str, default='Normal', metavar='N',
+                        choices=['Normal', 'Interface', 'Tumor', 'OSFA'], #place_type_1, place_type_2, place_type_3
+                        help='to use data generation by clusters or regular data')
+ 
+    parser.add_argument('--exp_name_global', type=str, default='global_wdlr', metavar='N',
                         help='Name of the experiment')
-    parser.add_argument('--zone', type=str, default='place_type_2', metavar='N',
-                        choices=['all', 'place_type_1', 'place_type_2', 'place_type_3'],
-                        help='Zone to use, [all, place_type_1, place_type_2, place_type_3]')
-    parser.add_argument('--dataset', type=str, default='place_type_2', metavar='N',
-                        choices=['osfa', 'place_type_1', 'place_type_2', 'place_type_3', 'noZone'],
-                        help='Dataset to use, [osfa, place_type_1, place_type_2, place_type_3]')
-    parser.add_argument('--model', type=str, default='sdgcnn', metavar='N',
-                        choices=['pointnet', 'fcnn',  'dgcnn', 'sdgcnn'],
-                        help='Model to use, [pointnet, dgcnn, sdgcnn]') 
-    parser.add_argument('--use_pe', type=bool,  default=False,
+    
+    parser.add_argument('--exp_name_local', type=str, default='local_wdlr', metavar='N',
+                        help='Name of the experiment') 
+
+    parser.add_argument('--pretrain_status', type=bool, default=False, metavar='N',
+                        help='if a pretrained model is already exist')
+
+    parser.add_argument('--model', type=str, default='samcnet', metavar='N',
+                        choices=['pointnet', 'fcnn',  'dgcnn', 'pointTransformers',  'samcnet'],
+                        help='Model to use, [pointnet, dgcnn, pointTransformers, samcnet]') 
+    
+    parser.add_argument('--weighted_distance', type=bool,  default=False,
+                        help='use weighted-distance learning rate')
+    
+    parser.add_argument('--use_pe', type=bool,  default=True,
                         help='use positional encoding')
     parser.add_argument('--batch_size', type=int, default=16, metavar='batch_size',
                         help='Size of batch)')
-    parser.add_argument('--test_batch_size', type=int, default=8, metavar='batch_size',
+    parser.add_argument('--test_batch_size', type=int, default=16, metavar='batch_size',
                         help='Size of batch)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
+    parser.add_argument('--epochs_global', type=int, default=200, metavar='N',
+                        help='number of epochs to train ')
+    parser.add_argument('--epochs_local', type=int, default=150, metavar='N',
                         help='number of epochs to train ')
     parser.add_argument('--radius', type=int, default=100, metavar='N',
                         help='neighborhood distance')
     parser.add_argument('--num_neighbors', type=int, default=5, metavar='N',
-                        help='number of epochs to train')
+                        help='number of neighbors to select')
     parser.add_argument('--use_sgd', type=bool, default=False,
                         help='Use SGD')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
@@ -501,7 +420,7 @@ if __name__ == "__main__":
                         help='enables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--eval', type=bool,  default=True,
+    parser.add_argument('--eval', type=bool,  default=False,
                         help='evaluate the model')
     parser.add_argument('--num_points', type=int, default=1024,
                         help='num of points to use')
@@ -513,24 +432,34 @@ if __name__ == "__main__":
                         help='Dimension of embeddings')
     parser.add_argument('--k', type=int, default=5, metavar='N',
                         help='Num of nearest neighbors to use')
-    parser.add_argument('--model_path', type=str, default='checkpoints/[model_path]', metavar='N',
-                        help='Pretrained model path')
-    parser.add_argument('--PE_dim', type=float, default=4, metavar='N',
+    parser.add_argument('--PE_dim', type=float, default=32, metavar='N',
                         help='If use_PE True, output dimmension of positional encoding (if use_pe fasle) this should be 4')
-    parser.add_argument('--save_features', type=str, default='./checkpoints/[save_features_path]', metavar='N',
-                        help='Save extracted features path')
-    parser.add_argument('--save_train_results', type=str, default='./checkpoints/[save_train&val_results]/', metavar='N',
-                        help='save training results (e.g., loss, acc, ... )')
+    
+    parser.add_argument('--num_frozen_layers', type=int, default=4, metavar='N',
+                        help='If exists a pre-trained model, how many layers should be frozen for fine-tuning')
+    
+    parser.add_argument('--model_path', type=str, default='', metavar='N',
+                        help='Pretrained model path')
+    
+    parser.add_argument('--train_res_global', type=str, default='', metavar='N',
+                        help='save training results for global model (e.g., loss, acc, ... )')
+    parser.add_argument('--train_res_local', type=str, default='', metavar='N',
+                        help='save training results for local model (e.g., loss, acc, ... )')
+    
+    parser.add_argument('--test_res_local', type=str, default='', metavar='N',
+                        help='save training results for local model (e.g., loss, acc, ... )')
+    
+    parser.add_argument('--local_learner_path', type=str, default='', metavar='N',
+                        help='fine-tuned model path of local model')
+    
     parser.add_argument('--train_val_index', type=int, default=1) 
     args = parser.parse_args()
  
-    _init_()
-
-    io = IOStream('checkpoints/' + args.dataset + "/" + args.exp_name + "/" + args.exp_name + '.log')
-    io.cprint(str(args))
-
+    _init_(args.exp_name_global)
+    _init_(args.exp_name_local)
+    io = IOStream('checkpoints/' + args.place_type + "/" + args.exp_name_global + "/" + args.exp_name_global + '.log')
+    # io.cprint(str(args))
     args.cuda = not args.no_cuda and torch.cuda.is_available()
-
     torch.manual_seed(args.seed)
     if args.cuda:
         io.cprint(
@@ -540,6 +469,21 @@ if __name__ == "__main__":
         io.cprint('Using CPU')
 
     if not args.eval:
-        train(args, io)
+        if args.pretrain_status:
+            pretrained_model, global_model_path = pretrain_learner(args=args, io=io)
+            io = IOStream(f'checkpoints/' + args.place_type + "/" + args.exp_name_local + "/" + args. exp_name_local + '.log')
+            io.cprint(str(args))
+            place_specifc_model, local_model_path = local_learner(args, global_model_path, io=io)
+        else:
+            io = IOStream(f'checkpoints/' + args.place_type + "/" + args.exp_name_local + "/" + args. exp_name_local + '.log')
+            io.cprint(str(args))
+            global_model_path = args.local_learner_path
+            place_specifc_model, local_model_path = local_learner(args, global_model_path, io=io)
+             
     else:
+        io = IOStream(f'checkpoints/' + args.place_type + "/" + args.exp_name_local + "/" + args.exp_name_local + '.log')
+        io.cprint(str(args))
         test(args, io) # Not implemented (yet)
+
+        # participation_ratio_files = pickle.load( open( prs + "BMS_AIM1_PRs.p", "rb"))
+    
