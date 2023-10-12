@@ -8,7 +8,7 @@ In this problem, we are given multi-category point sets from various place-types
 
 ## Proposed framework
 
-<img src='./Proposed.jpg' width=600>
+<img src='./Proposed.jpg' width=800>
 
 
 ## Instructions:
